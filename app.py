@@ -17,6 +17,12 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 VIXSRC_REFERER = "https://vixsrc.to/"
 VIXSRC_ORIGIN  = "https://vixsrc.to"
 
+# ── Proxy residenziale uscente (Webshare) ───────────────────────────────
+_OUTBOUND_PROXIES = {
+    "http":  "http://ecsdpfxz-rotate:dq51iygaxyw6@p.webshare.io:80",
+    "https": "http://ecsdpfxz-rotate:dq51iygaxyw6@p.webshare.io:80",
+}
+
 
 async def extract_playlist_url(movie_url):
     """
@@ -117,7 +123,8 @@ def _vixsrc_headers(referer=VIXSRC_REFERER):
 def _fetch_m3u8(url, referer=VIXSRC_REFERER):
     """Scarica il contenuto testuale di un m3u8 con gli header corretti."""
     try:
-        r = requests.get(url, headers=_vixsrc_headers(referer), timeout=10)
+        r = requests.get(url, headers=_vixsrc_headers(referer),
+                         proxies=_OUTBOUND_PROXIES, timeout=10)
         if r.status_code == 200:
             return r.text
     except Exception as e:
@@ -257,6 +264,7 @@ def proxy_m3u8():
         upstream = requests.get(
             target_url,
             headers=_vixsrc_headers(referer),
+            proxies=_OUTBOUND_PROXIES,
             timeout=20,
             stream=True,
         )
@@ -280,7 +288,13 @@ def proxy_m3u8():
     if is_m3u8:
         # Leggi tutto il testo e riscrivi gli URI
         raw_text   = upstream.text
-        proxy_base = request.host_url.rstrip('/')
+        # Usa X-Forwarded-Host se presente (Railway / reverse proxy)
+        forwarded_host  = request.headers.get('X-Forwarded-Host')
+        forwarded_proto = request.headers.get('X-Forwarded-Proto', 'https')
+        if forwarded_host:
+            proxy_base = f"{forwarded_proto}://{forwarded_host}"
+        else:
+            proxy_base = request.host_url.rstrip('/')
         rewritten  = _rewrite_m3u8(raw_text, target_url, proxy_base)
         response   = Response(rewritten, content_type='application/vnd.apple.mpegurl')
     else:
