@@ -8,12 +8,14 @@ import sys
 import json
 import asyncio
 import requests
-from urllib.parse import urlparse, parse_qs, urlencode
-from flask import Flask, request, jsonify, render_template
+from urllib.parse import urlparse, parse_qs, urlencode, urljoin
+from flask import Flask, request, jsonify, Response
 
 app = Flask(__name__)
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+VIXSRC_REFERER = "https://vixsrc.to/"
+VIXSRC_ORIGIN  = "https://vixsrc.to"
 
 
 async def extract_playlist_url(movie_url):
@@ -33,16 +35,12 @@ async def extract_playlist_url(movie_url):
         )
         page = await context.new_page()
         
-        # Intercetta TUTTE le richieste
-        async def handle_request(request):
-            url = request.url
-            # Cerchiamo SOLO i link /playlist/ su vixsrc.to
+        async def handle_request(req):
+            url = req.url
             if "/playlist/" in url and "vixsrc.to" in url:
                 if url not in playlist_urls:
                     playlist_urls.append(url)
                     print(f"[+] PLAYLIST: {url}")
-            
-            # Anche se ha /playlist/ in altri formati
             if "playlist" in url and "m3u8" in url:
                 if url not in playlist_urls:
                     playlist_urls.append(url)
@@ -50,7 +48,6 @@ async def extract_playlist_url(movie_url):
         
         async def handle_response(response):
             url = response.url
-            # Cattura anche i redirect che portano a playlist
             if "/playlist/" in url and "vixsrc.to" in url:
                 if url not in playlist_urls:
                     playlist_urls.append(url)
@@ -60,11 +57,8 @@ async def extract_playlist_url(movie_url):
         page.on("response", handle_response)
         
         print(f"[*] Caricamento: {movie_url}")
-        print("[*] In attesa di richieste a /playlist/...")
-        
         try:
             await page.goto(movie_url, wait_until="networkidle", timeout=30000)
-            # Aspetta più a lungo per catturare tutto
             for i in range(15):
                 await asyncio.sleep(1)
                 if playlist_urls:
@@ -73,23 +67,18 @@ async def extract_playlist_url(movie_url):
             print(f"[-] Timeout, ma continuo...")
             await asyncio.sleep(5)
         
-        # Prova anche con evaluate per estrarre direttamente dal JS
         try:
             print("[*] Provo estrazione dal JavaScript...")
             js_result = await page.evaluate("""
                 () => {
                     const results = [];
-                    // Cerca in tutti gli script tag
                     document.querySelectorAll('script').forEach(s => {
                         const text = s.textContent || '';
-                        // Cerca URL con /playlist/
                         const matches = text.match(/https?:\\/\\/[^'"\\s]*\\/playlist\\/[^'"\\s]*/g);
                         if (matches) results.push(...matches);
-                        // Cerca URL vixsrc.to/playlist
                         const matches2 = text.match(/vixsrc\\.to\\/playlist\\/[^'"\\s,&]*/g);
                         if (matches2) results.push(...matches2.map(u => 'https://' + u));
                     });
-                    // Cerca nel DOM
                     const all = document.querySelectorAll('*');
                     all.forEach(el => {
                         if (el.src && el.src.includes('/playlist/')) results.push(el.src);
@@ -100,7 +89,6 @@ async def extract_playlist_url(movie_url):
                 }
             """)
             for url in js_result:
-                # Normalizza: se inizia con // o è relativo
                 if url.startswith("//"):
                     url = "https:" + url
                 elif url.startswith("/"):
@@ -116,19 +104,20 @@ async def extract_playlist_url(movie_url):
     return playlist_urls
 
 
-def _fetch_m3u8(url, referer):
-    """Scarica il contenuto testuale di un m3u8, con gli header giusti
-    (molte CDN di vixsrc richiedono un Referer valido)."""
+def _vixsrc_headers(referer=VIXSRC_REFERER):
+    """Header HTTP che il CDN di vixsrc.to si aspetta."""
+    return {
+        "User-Agent": USER_AGENT,
+        "Referer":    referer,
+        "Origin":     VIXSRC_ORIGIN,
+        "Accept":     "*/*",
+    }
+
+
+def _fetch_m3u8(url, referer=VIXSRC_REFERER):
+    """Scarica il contenuto testuale di un m3u8 con gli header corretti."""
     try:
-        r = requests.get(
-            url,
-            headers={
-                "User-Agent": USER_AGENT,
-                "Referer": referer,
-                "Accept": "*/*",
-            },
-            timeout=10,
-        )
+        r = requests.get(url, headers=_vixsrc_headers(referer), timeout=10)
         if r.status_code == 200:
             return r.text
     except Exception as e:
@@ -137,10 +126,6 @@ def _fetch_m3u8(url, referer):
 
 
 def _playlist_has_audio(content):
-    """Un master playlist HLS valido con audio contiene tipicamente:
-    - una o più righe EXT-X-MEDIA:TYPE=AUDIO  (traccia audio separata)
-    - oppure CODECS="...,mp4a..." dentro EXT-X-STREAM-INF (audio muxato)
-    Se manca entrambo, è quasi certamente un sotto-playlist solo video."""
     if not content:
         return False
     if "EXT-X-MEDIA:TYPE=AUDIO" in content.upper():
@@ -151,16 +136,11 @@ def _playlist_has_audio(content):
 
 
 def _is_master_playlist(content):
-    """Un master playlist elenca varianti (#EXT-X-STREAM-INF), a differenza
-    di un media playlist che elenca direttamente i segmenti (#EXTINF)."""
     return bool(content) and "#EXT-X-STREAM-INF" in content.upper()
 
 
 async def get_best_playlist(movie_url):
-    """Trova la playlist migliore, verificando il CONTENUTO del file m3u8
-    (non solo il nome dell'URL) per essere sicuri che includa l'audio."""
     urls = await extract_playlist_url(movie_url)
-
     if not urls:
         return None
 
@@ -171,15 +151,10 @@ async def get_best_playlist(movie_url):
     vixsrc_playlists = [u for u in urls if "vixsrc.to/playlist/" in u]
     candidates = vixsrc_playlists if vixsrc_playlists else urls
 
-    # 1) Cerchiamo tra i candidati un MASTER playlist con audio dichiarato:
-    #    è la scelta più sicura, hls.js sceglierà da solo la variante migliore
-    #    mantenendo la traccia audio collegata.
     master_with_audio = None
-    any_with_audio = None
+    any_with_audio    = None
     for u in candidates:
-        content = _fetch_m3u8(u, referer=movie_url)
-        if content is None:
-            continue
+        content  = _fetch_m3u8(u, referer=movie_url)
         has_audio = _playlist_has_audio(content)
         is_master = _is_master_playlist(content)
         print(f"   [check] master={is_master} audio={has_audio} -> {u}")
@@ -187,18 +162,43 @@ async def get_best_playlist(movie_url):
             any_with_audio = u
         if has_audio and is_master:
             master_with_audio = u
-            break  # trovato il candidato migliore possibile
+            break
 
     if master_with_audio:
         return master_with_audio
     if any_with_audio:
         return any_with_audio
 
-    # 2) Fallback: nessun controllo sul contenuto è riuscito (es. richieste
-    #    bloccate dalla CDN): restituiamo comunque il primo link trovato,
-    #    meglio di niente, ma segnaliamo il problema nei log.
-    print("[!] Impossibile verificare la presenza dell'audio nei playlist trovati, uso il primo disponibile")
+    print("[!] Impossibile verificare l'audio, uso il primo disponibile")
     return candidates[0] if candidates else (urls[0] if urls else None)
+
+
+# ============================================================
+# Helper: riscrive i segmenti relativi dentro un M3U8
+# ============================================================
+
+def _rewrite_m3u8(content, original_url, proxy_base):
+    """
+    Trasforma tutti gli URI relativi dentro il testo M3U8 in
+    chiamate al proxy /proxy?url=<url_assoluto> in modo che
+    anche i sotto-playlist e i segmenti .ts vengano serviti
+    con gli header corretti.
+    """
+    base = original_url.rsplit("/", 1)[0] + "/"
+    lines = []
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or stripped == "":
+            lines.append(line)
+        else:
+            # URI assoluto o relativo → assoluto
+            if stripped.startswith("http://") or stripped.startswith("https://"):
+                abs_url = stripped
+            else:
+                abs_url = urljoin(base, stripped)
+            # Rimpiazza con la rotta proxy
+            lines.append(f"{proxy_base}/proxy?url={abs_url}")
+    return "\n".join(lines)
 
 
 # ============================================================
@@ -207,7 +207,6 @@ async def get_best_playlist(movie_url):
 
 @app.route('/')
 def index():
-    # Carica direttamente il file visyon.html posizionato dentro la cartella /templates
     return open('visyon.html').read()
 
 
@@ -226,14 +225,86 @@ def api_extract():
         loop.close()
         
         if playlist_url:
-            return jsonify({
-                'success': True,
-                'url': playlist_url,
-            })
+            return jsonify({'success': True, 'url': playlist_url})
         else:
             return jsonify({'success': False, 'error': 'Nessun link playlist trovato.'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
+
+
+@app.route('/proxy')
+def proxy_m3u8():
+    """
+    Proxy trasparente per i contenuti vixsrc.to.
+
+    Uso:  GET /proxy?url=<url_assoluto>
+
+    - Aggiunge Referer + Origin corretti alla richiesta upstream.
+    - Se la risposta è un M3U8 (playlist o segmento) riscrive gli URI
+      interni in modo che i sotto-playlist e i chunk .ts passino
+      anch'essi per questo proxy.
+    - Aggiunge gli header CORS necessari al client browser.
+    """
+    target_url = request.args.get('url', '')
+    if not target_url:
+        return jsonify({'error': 'Parametro url mancante'}), 400
+
+    # Determina il Referer in base all'host target
+    parsed = urlparse(target_url)
+    referer = f"{parsed.scheme}://{parsed.netloc}/"
+
+    try:
+        upstream = requests.get(
+            target_url,
+            headers=_vixsrc_headers(referer),
+            timeout=20,
+            stream=True,
+        )
+    except Exception as e:
+        return jsonify({'error': str(e)}), 502
+
+    content_type = upstream.headers.get('Content-Type', 'application/octet-stream')
+    is_m3u8 = (
+        'mpegurl' in content_type.lower()
+        or target_url.endswith('.m3u8')
+        or (upstream.status_code == 200 and upstream.text[:7] == '#EXTM3U')
+    )
+
+    if upstream.status_code != 200:
+        return Response(
+            upstream.content,
+            status=upstream.status_code,
+            content_type=content_type,
+        )
+
+    if is_m3u8:
+        # Leggi tutto il testo e riscrivi gli URI
+        raw_text   = upstream.text
+        proxy_base = request.host_url.rstrip('/')
+        rewritten  = _rewrite_m3u8(raw_text, target_url, proxy_base)
+        response   = Response(rewritten, content_type='application/vnd.apple.mpegurl')
+    else:
+        # Passa i byte così come sono (segmenti .ts, chiavi AES, ecc.)
+        response = Response(
+            upstream.iter_content(chunk_size=8192),
+            content_type=content_type,
+        )
+
+    # Header CORS — indispensabili per HLS.js nel browser
+    response.headers['Access-Control-Allow-Origin']  = '*'
+    response.headers['Access-Control-Allow-Headers'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+    return response
+
+
+@app.route('/proxy', methods=['OPTIONS'])
+def proxy_options():
+    """Preflight CORS."""
+    r = Response('', status=204)
+    r.headers['Access-Control-Allow-Origin']  = '*'
+    r.headers['Access-Control-Allow-Headers'] = '*'
+    r.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+    return r
 
 
 # ============================================================
@@ -250,11 +321,7 @@ if __name__ == '__main__':
                 print(f"\n[+] Link playlist:\n    {url}")
             else:
                 print("\n[-] Nessuna playlist trovata")
-        
-        async def run_main():
-            await main()
-            
-        asyncio.run(run_main())
+        asyncio.run(main())
     else:
         print("""
 ╔══════════════════════════════════════════════╗
