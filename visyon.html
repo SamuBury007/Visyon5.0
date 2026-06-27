@@ -246,6 +246,11 @@ async function extract() {
   }
 }
 
+function proxyUrl(originalUrl) {
+  // Indirizza la playlist attraverso il proxy Flask per aggiungere Referer/Origin corretti
+  return SERVER + '/proxy?url=' + encodeURIComponent(originalUrl);
+}
+
 function showResult(data) {
   const box = document.getElementById('resultBox');
   const label = document.getElementById('resultLabel');
@@ -260,11 +265,17 @@ function showResult(data) {
     label.textContent = '✓ Playlist trovata';
     urlEl.textContent = data.url;
 
+    // URL originale (per VLC e copia)
+    const rawUrl   = data.url;
+    // URL proxied (per riproduzione nel browser)
+    const proxied  = proxyUrl(rawUrl);
+
+    // --- Bottoni azione ---
     const copyBtn = document.createElement('button');
     copyBtn.className = 'btn-small accent';
     copyBtn.textContent = 'Copia link';
     copyBtn.onclick = () => {
-      navigator.clipboard.writeText(data.url);
+      navigator.clipboard.writeText(rawUrl);
       copyBtn.textContent = 'Copiato!';
       setTimeout(() => copyBtn.textContent = 'Copia link', 2000);
     };
@@ -272,14 +283,72 @@ function showResult(data) {
     const openBtn = document.createElement('button');
     openBtn.className = 'btn-small';
     openBtn.textContent = 'Apri in VLC';
-    openBtn.onclick = () => window.open('vlc://' + data.url);
+    openBtn.onclick = () => window.open('vlc://' + rawUrl);
 
+    const playBtn = document.createElement('button');
+    playBtn.className = 'btn-small accent';
+    playBtn.textContent = '▶ Riproduci qui';
+    playBtn.onclick = () => openPlayer(proxied);
+
+    actions.appendChild(playBtn);
     actions.appendChild(copyBtn);
     actions.appendChild(openBtn);
   } else {
     box.className = 'result-box error';
     label.textContent = '✗ Errore';
     urlEl.textContent = data.error || 'Nessun link trovato.';
+  }
+}
+
+// ── Player inline con HLS.js ──────────────────────────────────────────
+function openPlayer(proxiedUrl) {
+  // Rimuovi eventuale player precedente
+  const old = document.getElementById('hlsPlayerWrap');
+  if (old) old.remove();
+
+  const wrap = document.createElement('div');
+  wrap.id = 'hlsPlayerWrap';
+  wrap.style.cssText = 'margin-top:1.5rem;border-radius:12px;overflow:hidden;background:#000;position:relative;';
+
+  const video = document.createElement('video');
+  video.id = 'hlsVideo';
+  video.controls = true;
+  video.autoplay = true;
+  video.style.cssText = 'width:100%;display:block;max-height:360px;';
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = 'position:absolute;top:8px;right:8px;background:rgba(0,0,0,.6);color:#fff;border:none;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:14px;z-index:10;';
+  closeBtn.onclick = () => { wrap.remove(); };
+
+  wrap.appendChild(video);
+  wrap.appendChild(closeBtn);
+  document.querySelector('.container').appendChild(wrap);
+
+  // Carica HLS.js da CDN se non già presente
+  function initHls() {
+    if (Hls.isSupported()) {
+      const hls = new Hls();
+      hls.loadSource(proxiedUrl);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        if (data.fatal) console.error('HLS fatal error:', data);
+      });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Safari nativo
+      video.src = proxiedUrl;
+    } else {
+      alert('Il tuo browser non supporta HLS.');
+    }
+  }
+
+  if (window.Hls) {
+    initHls();
+  } else {
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.7/hls.min.js';
+    script.onload = initHls;
+    document.head.appendChild(script);
   }
 }
 
