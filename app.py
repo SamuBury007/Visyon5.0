@@ -208,7 +208,7 @@ async def get_best_playlist(movie_url):
 @app.route('/')
 def index():
     # Carica direttamente il file visyon.html posizionato dentro la cartella /templates
-    return render_template('visyon.html')
+    return open('visyon.html').read()
 
 
 @app.route('/extract', methods=['POST'])
