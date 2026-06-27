@@ -34,7 +34,14 @@ async def extract_playlist_url(movie_url):
     from playwright.async_api import async_playwright
     
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(
+            headless=True,
+            proxy={
+                "server":   "http://p.webshare.io:80",
+                "username": "ecsdpfxz-rotate",
+                "password": "dq51iygaxyw6",
+            }
+        )
         context = await browser.new_context(
             user_agent=USER_AGENT,
             viewport={"width": 1280, "height": 720}
