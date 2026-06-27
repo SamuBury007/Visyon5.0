@@ -244,11 +244,15 @@ def api_extract():
         loop.close()
         
         if playlist_url:
-            # Restituisci anche il contenuto M3U8 già scaricato (evita secondo fetch con token scaduto)
-            cached_content = _m3u8_cache.get(playlist_url, '')
+            # Forza lingua italiana
+            playlist_url_it = playlist_url.replace('lang=en', 'lang=it')
+            cached_content = _m3u8_cache.get(playlist_url, _m3u8_cache.get(playlist_url_it, ''))
+            # Aggiorna cache con URL italiano
+            if cached_content:
+                _m3u8_cache[playlist_url_it] = cached_content
             return jsonify({
                 'success': True,
-                'url': playlist_url,
+                'url': playlist_url_it,
                 'm3u8_content': cached_content,
             })
         else:
