@@ -193,26 +193,35 @@ async def get_best_playlist(movie_url):
 
 def _rewrite_m3u8(content, original_url, proxy_base):
     """
-    Trasforma tutti gli URI relativi dentro il testo M3U8 in
-    chiamate al proxy /proxy?url=<url_assoluto> in modo che
-    anche i sotto-playlist e i segmenti .ts vengano serviti
-    con gli header corretti.
+    Trasforma tutti gli URI dentro il testo M3U8 in chiamate al proxy:
+    - righe URI (segmenti .ts, sotto-playlist)
+    - URI dentro #EXT-X-KEY (chiave AES-128)
     """
+    from urllib.parse import quote
+    import re
     base = original_url.rsplit("/", 1)[0] + "/"
+
+    def to_proxy(url):
+        if not (url.startswith("http://") or url.startswith("https://")):
+            url = urljoin(base, url)
+        return f"{proxy_base}/proxy?url={quote(url, safe='')}"
+
     lines = []
     for line in content.splitlines():
         stripped = line.strip()
-        if stripped.startswith("#") or stripped == "":
+        if stripped == "":
+            lines.append(line)
+        elif stripped.startswith("#EXT-X-KEY"):
+            # Riscrive URI="..." dentro la riga EXT-X-KEY
+            def replace_key_uri(m):
+                key_url = m.group(1)
+                return f'URI="{to_proxy(key_url)}"'
+            new_line = re.sub(r'URI="([^"]+)"', replace_key_uri, line)
+            lines.append(new_line)
+        elif stripped.startswith("#"):
             lines.append(line)
         else:
-            # URI assoluto o relativo → assoluto
-            if stripped.startswith("http://") or stripped.startswith("https://"):
-                abs_url = stripped
-            else:
-                abs_url = urljoin(base, stripped)
-            # Rimpiazza con la rotta proxy (encoding corretto)
-            from urllib.parse import quote
-            lines.append(f"{proxy_base}/proxy?url={quote(abs_url, safe='')}")
+            lines.append(to_proxy(stripped))
     return "\n".join(lines)
 
 
