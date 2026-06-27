@@ -352,17 +352,24 @@ function openPlayer(proxiedUrl) {
   wrap.appendChild(closeBtn);
   document.querySelector('.container').appendChild(wrap);
 
-  // Carica HLS.js da CDN se non già presente
   function initHls() {
     if (Hls.isSupported()) {
-      const hls = new Hls();
+      const hls = new Hls({
+        // Forza sempre la qualità più alta disponibile (1080p)
+        startLevel: -1,          // auto al primo caricamento
+        capLevelToPlayerSize: false,
+        autoLevelCapping: -1,    // nessun cap
+      });
       hls.loadSource(proxiedUrl);
       hls.attachMedia(video);
+      // Appena i livelli sono disponibili, salta al più alto
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        hls.currentLevel = hls.levels.length - 1;
+      });
       hls.on(Hls.Events.ERROR, (event, data) => {
         if (data.fatal) console.error('HLS fatal error:', data);
       });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      // Safari nativo
       video.src = proxiedUrl;
     } else {
       alert('Il tuo browser non supporta HLS.');
