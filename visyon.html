@@ -303,17 +303,14 @@ function showResult(data) {
 // ── Player inline con HLS.js ──────────────────────────────────────────
 
 function openPlayerFromContent(m3u8Text, originalUrl) {
-  // Riscrive i segmenti relativi come URL assoluti passando per /proxy
   const base = originalUrl.substring(0, originalUrl.lastIndexOf('/') + 1);
-  const lines = m3u8Text.split('
-').map(line => {
+  const lines = m3u8Text.split('\n').map(line => {
     const t = line.trim();
     if (!t || t.startsWith('#')) return line;
     const abs = t.startsWith('http') ? t : base + t;
     return SERVER + '/proxy?url=' + encodeURIComponent(abs);
   });
-  const rewritten = lines.join('
-');
+  const rewritten = lines.join('\n');
   const blob = new Blob([rewritten], { type: 'application/vnd.apple.mpegurl' });
   const blobUrl = URL.createObjectURL(blob);
   openPlayer(blobUrl);
