@@ -206,8 +206,9 @@ def _rewrite_m3u8(content, original_url, proxy_base):
                 abs_url = stripped
             else:
                 abs_url = urljoin(base, stripped)
-            # Rimpiazza con la rotta proxy
-            lines.append(f"{proxy_base}/proxy?url={abs_url}")
+            # Rimpiazza con la rotta proxy (encoding corretto)
+            from urllib.parse import quote
+            lines.append(f"{proxy_base}/proxy?url={quote(abs_url, safe='')}")
     return "\n".join(lines)
 
 
@@ -246,18 +247,20 @@ def api_extract():
 def proxy_m3u8():
     """
     Proxy trasparente per i contenuti vixsrc.to.
-
     Uso:  GET /proxy?url=<url_assoluto>
-
-    - Aggiunge Referer + Origin corretti alla richiesta upstream.
-    - Se la risposta è un M3U8 (playlist o segmento) riscrive gli URI
-      interni in modo che i sotto-playlist e i chunk .ts passino
-      anch'essi per questo proxy.
-    - Aggiunge gli header CORS necessari al client browser.
     """
+    from urllib.parse import unquote
+    # request.args decodifica automaticamente %3D → = e %26 → &
+    # ma se il frontend ha encodato due volte, dobbiamo fare unquote manuale
     target_url = request.args.get('url', '')
     if not target_url:
         return jsonify({'error': 'Parametro url mancante'}), 400
+
+    # Decodifica doppio encoding se presente
+    if '%25' in target_url or '%3D' in target_url:
+        target_url = unquote(target_url)
+
+    print(f"[proxy] → {target_url}")
 
     # Determina il Referer in base all'host target
     parsed = urlparse(target_url)
