@@ -211,15 +211,10 @@ def _rewrite_m3u8(content, original_url, proxy_base):
         stripped = line.strip()
         if stripped == "":
             lines.append(line)
-        elif stripped.startswith("#EXT-X-KEY"):
-            # Riscrive URI="..." dentro la riga EXT-X-KEY
-            def replace_key_uri(m):
-                key_url = m.group(1)
-                return f'URI="{to_proxy(key_url)}"'
-            new_line = re.sub(r'URI="([^"]+)"', replace_key_uri, line)
-            lines.append(new_line)
         elif stripped.startswith("#"):
-            lines.append(line)
+            # Riscrive TUTTI gli URI="..." in qualsiasi tag (#EXT-X-KEY, #EXT-X-MEDIA, ecc.)
+            new_line = re.sub(r'URI="([^"]+)"', lambda m: f'URI="{to_proxy(m.group(1))}"'  , line)
+            lines.append(new_line)
         else:
             lines.append(to_proxy(stripped))
     return "\n".join(lines)
