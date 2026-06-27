@@ -113,6 +113,9 @@ async def extract_playlist_url(movie_url):
 # Sessione globale: mantiene lo stesso IP di uscita per tutte le richieste
 _SESSION = requests.Session()
 
+# Cache: conserva l'ultimo contenuto M3U8 scaricato e il suo URL originale
+_m3u8_cache = {}  # { url: contenuto_testuale }
+
 def _vixsrc_headers(referer=VIXSRC_REFERER):
     """Header HTTP che il CDN di vixsrc.to si aspetta."""
     return {
@@ -124,10 +127,11 @@ def _vixsrc_headers(referer=VIXSRC_REFERER):
 
 
 def _fetch_m3u8(url, referer=VIXSRC_REFERER):
-    """Scarica il contenuto testuale di un m3u8 con gli header corretti."""
+    """Scarica il contenuto testuale di un m3u8 con gli header corretti e lo cacha."""
     try:
         r = _SESSION.get(url, headers=_vixsrc_headers(referer), timeout=10)
         if r.status_code == 200:
+            _m3u8_cache[url] = r.text
             return r.text
         print(f"[-] HTTP {r.status_code} per {url}")
     except Exception as e:
@@ -236,7 +240,13 @@ def api_extract():
         loop.close()
         
         if playlist_url:
-            return jsonify({'success': True, 'url': playlist_url})
+            # Restituisci anche il contenuto M3U8 già scaricato (evita secondo fetch con token scaduto)
+            cached_content = _m3u8_cache.get(playlist_url, '')
+            return jsonify({
+                'success': True,
+                'url': playlist_url,
+                'm3u8_content': cached_content,
+            })
         else:
             return jsonify({'success': False, 'error': 'Nessun link playlist trovato.'})
     except Exception as e:
