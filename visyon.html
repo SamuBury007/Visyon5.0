@@ -310,14 +310,15 @@ function openPlayerFromContent(m3u8Text, originalUrl) {
     return SERVER + '/proxy?url=' + encodeURIComponent(abs);
   }
 
+  // Riscrive TUTTI gli URI="..." in qualsiasi riga # (KEY, MEDIA, ecc.)
+  function rewriteTagUris(line) {
+    return line.replace(/URI="([^"]+)"/g, (_, uri) => 'URI="' + toProxy(uri) + '"');
+  }
+
   const lines = m3u8Text.split('\n').map(line => {
     const t = line.trim();
     if (!t) return line;
-    // Riscrive URI della chiave AES-128 dentro #EXT-X-KEY
-    if (t.startsWith('#EXT-X-KEY')) {
-      return line.replace(/URI="([^"]+)"/, (_, uri) => 'URI="' + toProxy(uri) + '"');
-    }
-    if (t.startsWith('#')) return line;
+    if (t.startsWith('#')) return rewriteTagUris(line);
     return toProxy(t);
   });
 
