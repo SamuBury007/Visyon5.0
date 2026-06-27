@@ -246,11 +246,6 @@ async function extract() {
   }
 }
 
-function proxyUrl(originalUrl) {
-  // Indirizza la playlist attraverso il proxy Flask per aggiungere Referer/Origin corretti
-  return SERVER + '/proxy?url=' + encodeURIComponent(originalUrl);
-}
-
 function showResult(data) {
   const box = document.getElementById('resultBox');
   const label = document.getElementById('resultLabel');
@@ -265,12 +260,9 @@ function showResult(data) {
     label.textContent = '✓ Playlist trovata';
     urlEl.textContent = data.url;
 
-    // URL originale (per VLC e copia)
-    const rawUrl   = data.url;
-    // URL proxied (per riproduzione nel browser)
-    const proxied  = proxyUrl(rawUrl);
+    const rawUrl = data.url;
+    const m3u8Content = data.m3u8_content || '';
 
-    // --- Bottoni azione ---
     const copyBtn = document.createElement('button');
     copyBtn.className = 'btn-small accent';
     copyBtn.textContent = 'Copia link';
@@ -288,7 +280,15 @@ function showResult(data) {
     const playBtn = document.createElement('button');
     playBtn.className = 'btn-small accent';
     playBtn.textContent = '▶ Riproduci qui';
-    playBtn.onclick = () => openPlayer(proxied);
+    playBtn.onclick = () => {
+      if (m3u8Content) {
+        // Usa il contenuto M3U8 già scaricato → nessun secondo fetch con token scaduto
+        openPlayerFromContent(m3u8Content, rawUrl);
+      } else {
+        // Fallback: proxy endpoint
+        openPlayer(SERVER + '/proxy?url=' + encodeURIComponent(rawUrl));
+      }
+    };
 
     actions.appendChild(playBtn);
     actions.appendChild(copyBtn);
@@ -301,6 +301,24 @@ function showResult(data) {
 }
 
 // ── Player inline con HLS.js ──────────────────────────────────────────
+
+function openPlayerFromContent(m3u8Text, originalUrl) {
+  // Riscrive i segmenti relativi come URL assoluti passando per /proxy
+  const base = originalUrl.substring(0, originalUrl.lastIndexOf('/') + 1);
+  const lines = m3u8Text.split('
+').map(line => {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) return line;
+    const abs = t.startsWith('http') ? t : base + t;
+    return SERVER + '/proxy?url=' + encodeURIComponent(abs);
+  });
+  const rewritten = lines.join('
+');
+  const blob = new Blob([rewritten], { type: 'application/vnd.apple.mpegurl' });
+  const blobUrl = URL.createObjectURL(blob);
+  openPlayer(blobUrl);
+}
+
 function openPlayer(proxiedUrl) {
   // Rimuovi eventuale player precedente
   const old = document.getElementById('hlsPlayerWrap');
