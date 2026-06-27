@@ -17,11 +17,11 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 VIXSRC_REFERER = "https://vixsrc.to/"
 VIXSRC_ORIGIN  = "https://vixsrc.to"
 
-# ── Proxy residenziale uscente (Webshare) ───────────────────────────────
-_OUTBOUND_PROXIES = {
-    "http":  "http://ecsdpfxz-rotate:dq51iygaxyw6@p.webshare.io:80",
-    "https": "http://ecsdpfxz-rotate:dq51iygaxyw6@p.webshare.io:80",
-}
+# ── Nessun proxy uscente (Webshare Free non supporta HTTPS) ─────────────
+# Il token vixsrc è legato all'IP di Railway: Playwright e il proxy /proxy
+# devono girare sullo stesso processo Flask → stesso IP → nessun 403.
+_OUTBOUND_PROXIES      = None
+_OUTBOUND_PROXIES_HTTPS = None
 
 
 async def extract_playlist_url(movie_url):
@@ -34,14 +34,7 @@ async def extract_playlist_url(movie_url):
     from playwright.async_api import async_playwright
     
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            proxy={
-                "server":   "http://p.webshare.io:80",
-                "username": "ecsdpfxz-rotate",
-                "password": "dq51iygaxyw6",
-            }
-        )
+        browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
             user_agent=USER_AGENT,
             viewport={"width": 1280, "height": 720}
@@ -117,6 +110,9 @@ async def extract_playlist_url(movie_url):
     return playlist_urls
 
 
+# Sessione globale: mantiene lo stesso IP di uscita per tutte le richieste
+_SESSION = requests.Session()
+
 def _vixsrc_headers(referer=VIXSRC_REFERER):
     """Header HTTP che il CDN di vixsrc.to si aspetta."""
     return {
@@ -130,10 +126,10 @@ def _vixsrc_headers(referer=VIXSRC_REFERER):
 def _fetch_m3u8(url, referer=VIXSRC_REFERER):
     """Scarica il contenuto testuale di un m3u8 con gli header corretti."""
     try:
-        r = requests.get(url, headers=_vixsrc_headers(referer),
-                         proxies=_OUTBOUND_PROXIES, timeout=10)
+        r = _SESSION.get(url, headers=_vixsrc_headers(referer), timeout=10)
         if r.status_code == 200:
             return r.text
+        print(f"[-] HTTP {r.status_code} per {url}")
     except Exception as e:
         print(f"[-] Errore nel fetch di {url}: {e}")
     return None
@@ -268,10 +264,9 @@ def proxy_m3u8():
     referer = f"{parsed.scheme}://{parsed.netloc}/"
 
     try:
-        upstream = requests.get(
+        upstream = _SESSION.get(
             target_url,
             headers=_vixsrc_headers(referer),
-            proxies=_OUTBOUND_PROXIES,
             timeout=20,
             stream=True,
         )
