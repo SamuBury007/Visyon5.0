@@ -304,12 +304,23 @@ function showResult(data) {
 
 function openPlayerFromContent(m3u8Text, originalUrl) {
   const base = originalUrl.substring(0, originalUrl.lastIndexOf('/') + 1);
+
+  function toProxy(url) {
+    const abs = url.startsWith('http') ? url : base + url;
+    return SERVER + '/proxy?url=' + encodeURIComponent(abs);
+  }
+
   const lines = m3u8Text.split('\n').map(line => {
     const t = line.trim();
-    if (!t || t.startsWith('#')) return line;
-    const abs = t.startsWith('http') ? t : base + t;
-    return SERVER + '/proxy?url=' + encodeURIComponent(abs);
+    if (!t) return line;
+    // Riscrive URI della chiave AES-128 dentro #EXT-X-KEY
+    if (t.startsWith('#EXT-X-KEY')) {
+      return line.replace(/URI="([^"]+)"/, (_, uri) => 'URI="' + toProxy(uri) + '"');
+    }
+    if (t.startsWith('#')) return line;
+    return toProxy(t);
   });
+
   const rewritten = lines.join('\n');
   const blob = new Blob([rewritten], { type: 'application/vnd.apple.mpegurl' });
   const blobUrl = URL.createObjectURL(blob);
