@@ -6,4 +6,4 @@ RUN pip install flask playwright requests
 RUN playwright install chromium
 
 EXPOSE 8080
-CMD ["python", "vidsrc_extractor.py"]
+CMD ["python", "app.py"]
